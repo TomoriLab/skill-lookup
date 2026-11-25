@@ -1,6 +1,6 @@
 [project]
 name = "skill-lookup"
-version = "0.1.0"
+version = "0.2.0"
 description = "Read installed Markdown skills in batches and find sections with SQLite FTS5."
 readme = "README.md"
 license = "BSD-3-Clause"
