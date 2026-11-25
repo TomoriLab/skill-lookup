@@ -1,0 +1,22 @@
+[project]
+name = "skill-lookup"
+version = "0.1.0"
+description = "Read installed Markdown skills in batches and find sections with SQLite FTS5."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+skill-lookup = "skill_lookup.cli:main"
+
+[project.urls]
+Repository = "https://github.com/TomoriLab/skill-lookup"
+
+[build-system]
+requires = ["uv_build>=0.13.10,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["tests/*.py", "uv.lock"]
