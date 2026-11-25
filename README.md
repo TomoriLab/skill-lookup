@@ -4,36 +4,56 @@
 
 ## 설치
 
-Python 3.10 이상과 저장소를 읽을 수 있는 GitHub SSH 키가 필요하다.
-
 ```sh
 uv tool install git+ssh://git@github.com/TomoriLab/skill-lookup.git
 ```
 
+이미 복제한 저장소에서는 `uv tool install .`로 설치할 수 있다.
+
 ## 스킬 읽기
+
+스킬 이름과 Markdown 경로를 함께 넘기면 지정한 순서대로 읽고 같은 파일은 한 번만 출력한다. 스킬은 `~/.codex/skills`에서 먼저 찾고 `~/.agents/skills`에서 다시 찾는다. `CODEX_HOME`을 지정한 환경에서는 첫 경로가 `$CODEX_HOME/skills`다.
 
 ```sh
 skill-lookup ko-writing clang dynamic-linking
+skill-lookup clang clang/references/flags.md
+```
+
+`ko-writing`은 설치된 `effective-writing`과 그 기본 글쓰기 가이드, `ai-slop-thresher`를 묶어 읽는 별칭이다.
+
+스킬 파일이 바뀌면 다음 조회에서 캐시가 갱신된다. `skill-lookup --status clang`으로 캐시 사용 여부를 확인할 수 있다.
+
+절 제목을 알면 `--section`으로 그 절과 하위 절을 읽는다. 제목을 모르면 `--search`로 해당 스킬 안에서 검색한다. FTS5 검색은 일치하는 문서 경로와 제목, 발췌문을 최대 세 개 보여준다.
+
+```sh
 skill-lookup --section 'Workflow' clang
 skill-lookup --search 'RUNPATH' dynamic-linking
 ```
 
-`ko-writing`은 설치된 `effective-writing`과 `ai-slop-thresher`를 함께 읽는 별칭이다. `--section`은 제목으로 절을 읽고, `--search`는 SQLite FTS5로 관련 구절을 찾는다.
-
 ## 코드 위치 저장하기
 
-Swift Wayland 저장소 루트에서 `ImportedProtocolProbe`의 호출 위치를 저장하는 예다.
+다음은 Swift Wayland 저장소에서 `ImportedProtocolProbe`를 어디서 실행하는지 확인하고 그 위치를 기억해 두는 예다. 저장과 조회는 같은 저장소 루트에서 실행한다.
 
 ```sh
-skill-lookup remember probe-launch --file Scripts/verify-imported-protocols.py \
-  --skill dynamic-linking --result 'ImportedProtocolProbe는 debug와 release에서 각각 실행된다.' \
-  --evidence 'verify-imported-protocols.py의 check_output 호출 두 곳'
-skill-lookup recall probe-launch
+rg -n 'check_output.*ImportedProtocolProbe' Scripts/verify-imported-protocols.py
+skill-lookup remember probe-launch \
+  --file Scripts/verify-imported-protocols.py --skill dynamic-linking \
+  --result 'verify-imported-protocols.py에서 debug와 release 실행 파일을 각각 호출한다.' \
+  --evidence 'check_output에 ImportedProtocolProbe 경로를 넘기는 두 곳'
 ```
 
-등록한 파일이나 스킬이 바뀌면 같은 키로 조회해도 이전 결과는 나오지 않는다.
+다음 대화에서는 키로 결과와 근거를 다시 꺼낸다. 키가 기억나지 않으면 검색어로 후보 키를 찾을 수 있다.
+
+```sh
+skill-lookup recall probe-launch
+skill-lookup recall --search 'ImportedProtocolProbe'
+```
+
+여러 파일이나 스킬을 참조했다면 `--file`과 `--skill`을 반복해 등록한다. 등록한 입력이 바뀌면 `recall`은 아무것도 출력하지 않고 종료 코드 1을 반환한다.
 
 ## 글로벌 AGENTS.md 예시
+
+`~/.codex/AGENTS.md`에 다음 지침을 추가한다. `CODEX_HOME`을 지정했다면 `$CODEX_HOME/AGENTS.md`를 사용한다.
 
 ```markdown
 한국어 작업에 필요한 글쓰기 스킬과 기술 스킬은 `skill-lookup ko-writing clang dynamic-linking`처럼 한 번에 읽는다.
