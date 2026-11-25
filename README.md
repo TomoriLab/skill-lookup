@@ -88,3 +88,7 @@ uv sync --locked
 uv run --locked python -m unittest discover -s tests
 uv build
 ```
+
+## 라이선스
+
+[BSD 3-Clause](LICENSE)
