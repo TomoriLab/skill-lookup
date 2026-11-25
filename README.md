@@ -4,7 +4,7 @@
 
 ## 설치
 
-아래 Git 명령은 비공개 저장소를 읽을 수 있는 GitHub SSH 인증을 사용한다. Python 3.10 이상과 `sqlite3` 모듈이 필요하다. `--search`에는 FTS5와 `trigram` 토크나이저도 필요하다.
+아래 Git 명령은 비공개 저장소를 읽을 수 있는 GitHub SSH 인증을 사용한다. Python 3.10 이상과 `sqlite3` 모듈이 필요하다. 키워드 검색에는 FTS5가 필요하며 스킬 문서 검색에는 `trigram` 토크나이저도 필요하다.
 
 uv로 GitHub에서 바로 설치할 수 있다. 실행 파일은 `uv tool dir --bin`이 가리키는 디렉터리에 생긴다.
 
@@ -14,7 +14,7 @@ export PATH="$(uv tool dir --bin):$PATH"
 skill-lookup --help
 ```
 
-새 셸에서도 명령을 찾게 하려면 `uv tool update-shell`을 실행한 뒤 셸을 다시 연다. wheel 파일을 전달받은 환경에서는 `uv tool install ./skill_lookup-0.1.0-py3-none-any.whl`로 설치할 수 있다.
+새 셸에서도 명령을 찾게 하려면 `uv tool update-shell`을 실행한 뒤 셸을 다시 연다. wheel 파일을 전달받은 환경에서는 `uv tool install ./skill_lookup-0.2.0-py3-none-any.whl`로 설치할 수 있다.
 
 소스에서 설치하려면 저장소를 복제한 뒤 로컬 경로를 지정한다.
 
@@ -67,7 +67,28 @@ Codex를 실행하는 환경의 `PATH`에 `skill-lookup`이 있으면 다음 지
 정보가 부족하고 절 제목을 알면 `skill-lookup --section '제목' 문서`로 바로 읽는다.
 절 제목도 모를 때만 `skill-lookup --search '검색어' 스킬`을 사용한다. 발췌문이 부족할 때만 결과의 문서와 제목으로 해당 절을 읽는다.
 FTS5 검색을 사용할 수 없으면 원문에서 제목을 찾는다. CLI가 설치되어 있지 않으면 필요한 스킬과 참조를 원문에서 직접 읽는다.
+반복 작업에서 `skill-lookup recall 키`로 재사용하는 정보는 파일 위치와 호출 경로 같은 탐색 결과로 한정한다. 빗나가면 현재 소스를 확인한다.
+각 회귀 테스트를 원본의 기존 진입점에서 실행해 결함이 발생한 구성요소의 진단을 기록한다. 컴파일러 오류는 실제 컴파일러로, 로더 오류는 실제 바이너리를 실행해 재현한다. 수정본에서 같은 테스트가 통과하는지 확인한다.
 ```
+
+## 확인한 결과 재사용
+
+같은 체크아웃에서 새 대화를 시작해도 이전에 확인한 파일과 호출 위치를 다시 찾을 수 있다. 예를 들어 Swift Wayland 저장소에서 실행 파일 호출 위치를 확인한 뒤 다음과 같이 저장한다.
+
+```sh
+rg -n 'ImportedProtocolProbe' Scripts/verify-imported-protocols.py
+skill-lookup remember probe-launch \
+  --file Scripts/verify-imported-protocols.py --skill dynamic-linking \
+  --result 'verify-imported-protocols.py가 debug와 release의 ImportedProtocolProbe를 각각 실행한다.' \
+  --evidence 'Scripts/verify-imported-protocols.py에서 ImportedProtocolProbe의 두 check_output 호출을 확인했다.'
+skill-lookup recall probe-launch
+```
+
+`--repo`의 기본값은 현재 디렉터리다. 다른 디렉터리에서 호출할 때는 같은 저장소 루트를 지정한다. `remember`는 사용자가 확인한 결과를 저장한다. `--file`에는 판단에 쓰인 저장소 상대 경로를, `--skill`에는 스킬 이름이나 Markdown 경로를 모두 지정한다. 두 옵션 모두 반복할 수 있다. 도구 버전이나 환경 변수에 의존하면 저장과 조회 양쪽에 같은 조건을 넘긴다. 예를 들어 `--context "$(clang --version)"`을 쓸 수 있다.
+
+`recall`은 등록된 파일과 스킬의 현재 SHA-256을 검사한다. 스킬 이름으로 디렉터리를 등록하면 참조와 보조 스크립트도 검사한다. `.git`과 `__pycache__`는 제외한다. 문서 경로나 `ko-writing` 별칭은 지정된 문서만 검사한다. 적중하면 키·결과·근거를 JSON으로 출력한다. 입력 변경·삭제, 다른 체크아웃, 조건 불일치 또는 미등록 키는 종료 코드 1과 빈 표준 출력으로 구분한다. 등록하지 않은 파일이나 환경 변경은 감지할 수 없다.
+
+키를 모를 때만 `skill-lookup recall --search 'ImportedProtocolProbe'`로 검색한다. 검색은 입력이 여전히 유효한 후보 키를 최대 세 개 반환한다. 필요한 키를 골라 정확히 조회한다. `remember`나 `recall`이라는 이름의 스킬 문서는 `skill-lookup -- remember`처럼 읽을 수 있다.
 
 ## 캐시
 

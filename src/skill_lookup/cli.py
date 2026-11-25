@@ -31,6 +31,8 @@
 """Retrieve installed Markdown skills and references in one call."""
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -249,8 +251,172 @@ def resolve_sources(arguments, root, *, search):
     return sources
 
 
+def file_digest(path):
+    if not path.is_file():
+        raise ValueError(f"Expected a regular file: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        initial = os.fstat(stream.fileno())
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    if signature(initial) != signature(path.stat()):
+        raise OSError(f"File changed during lookup: {path}")
+    return [initial.st_mode & 0o111, digest.hexdigest()]
+
+
+def skill_digest(path, parents=()):
+    if not path.is_dir():
+        return file_digest(path)
+    directory = path.resolve(strict=True)
+    if directory in parents:
+        raise ValueError(f"Circular skill directory: {path}")
+    # Include references and helper scripts even when the main Markdown is unchanged.
+    return {
+        child.name: skill_digest(child, (*parents, directory))
+        for child in sorted(path.iterdir())
+        if child.name not in {".git", "__pycache__"}
+    }
+
+
+def fingerprint(repo, root, files, skills):
+    inputs = []
+    for name in files:
+        path = (repo / name).resolve(strict=True)
+        if Path(name).is_absolute() or not path.is_relative_to(repo):
+            raise ValueError(f"Expected a path within the repository: {name}")
+        inputs.append([name, file_digest(path)])
+    for name in skills:
+        paths = resolve_sources([name], root, search=True)
+        inputs.append([name, [skill_digest(path) for path in paths]])
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+
+
+def has_table(connection, name):
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone() is not None
+
+
+def remember(connection, args, repo, root):
+    files = sorted(set(args.file))
+    skills = sorted(set(args.skill))
+    digest = fingerprint(repo, root, files, skills)
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS memories (repo TEXT, key TEXT, files TEXT, "
+        "skills TEXT, context TEXT, digest TEXT, result TEXT, evidence TEXT, "
+        "PRIMARY KEY (repo, key))"
+    )
+    connection.execute(
+        "INSERT INTO memories(repo,key,files,skills,context,digest,result,evidence) "
+        "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(repo,key) DO UPDATE SET "
+        "files=excluded.files, skills=excluded.skills, context=excluded.context, "
+        "digest=excluded.digest, result=excluded.result, evidence=excluded.evidence",
+        (str(repo), args.key, json.dumps(files), json.dumps(skills),
+         json.dumps(sorted(set(args.context))), digest, args.result, args.evidence),
+    )
+    if has_table(connection, "memory_search"):
+        rowid, = connection.execute(
+            "SELECT rowid FROM memories WHERE repo=? AND key=?", (str(repo), args.key)
+        ).fetchone()
+        connection.execute("DELETE FROM memory_search WHERE rowid=?", (rowid,))
+        connection.execute(
+            "INSERT INTO memory_search(rowid,key,result,evidence) VALUES (?,?,?,?)",
+            (rowid, args.key, args.result, args.evidence),
+        )
+
+
+def search_memories(connection, query, repo):
+    if not has_table(connection, "memory_search"):
+        connection.execute("BEGIN IMMEDIATE")
+        if not has_table(connection, "memory_search"):
+            connection.execute(
+                "CREATE VIRTUAL TABLE memory_search USING fts5(key, result, evidence)"
+            )
+            connection.execute(
+                "INSERT INTO memory_search(rowid,key,result,evidence) "
+                "SELECT rowid,key,result,evidence FROM memories"
+            )
+        connection.commit()
+    expression = " AND ".join('"' + term.replace('"', '""') + '"' for term in query.split())
+    return connection.execute(
+        "SELECT m.* FROM memory_search JOIN memories AS m ON m.rowid=memory_search.rowid "
+        "WHERE memory_search MATCH ? AND m.repo=? ORDER BY rank,m.key",
+        (expression, str(repo)),
+    )
+
+
+def recall(connection, args, repo, root):
+    if not has_table(connection, "memories"):
+        return 1
+    connection.row_factory = sqlite3.Row
+    if args.search:
+        rows = search_memories(connection, args.search, repo)
+    else:
+        rows = connection.execute("SELECT * FROM memories WHERE repo=? AND key=?", (str(repo), args.key))
+    count = 0
+    for row in rows:
+        files, skills = json.loads(row["files"]), json.loads(row["skills"])
+        if (sorted(set(args.context)) != json.loads(row["context"])
+                or (args.file and sorted(set(args.file)) != files)
+                or (args.skill and sorted(set(args.skill)) != skills)):
+            continue
+        try:
+            current = fingerprint(repo, root, files, skills)
+        except (OSError, ValueError):
+            continue
+        if current != row["digest"]:
+            continue
+        hit = {"key": row["key"]}
+        if not args.search:
+            hit.update(result=row["result"], evidence=row["evidence"])
+        print(json.dumps(hit, ensure_ascii=False))
+        count += 1
+        if count == 3:
+            break
+    return 0 if count else 1
+
+
+def memory_command(verb, argv, root, database):
+    parser = argparse.ArgumentParser(prog=f"skill-lookup {verb}")
+    saving = verb == "remember"
+    if saving:
+        parser.add_argument("key")
+        parser.add_argument("--result", required=True)
+        parser.add_argument("--evidence", required=True, help="How the result was verified")
+    else:
+        choice = parser.add_mutually_exclusive_group(required=True)
+        choice.add_argument("key", nargs="?")
+        choice.add_argument("--search", help="Find up to three current candidate keys with FTS5")
+    parser.add_argument("--repo", default=".", type=Path, help="Repository root (default: current directory)")
+    parser.add_argument("--file", action="append", required=saving, help="Repository-relative input file")
+    parser.add_argument("--skill", action="append", required=saving, help="Installed skill or Markdown reference")
+    parser.add_argument("--context", action="append", default=[], help="Additional condition, e.g. a tool version")
+    args = parser.parse_args(argv)
+    for field in ("key", "search", "result", "evidence"):
+        value = getattr(args, field, None)
+        if value is not None and not value.strip():
+            parser.error(f"{field} must not be blank")
+    repo = args.repo.resolve(strict=True)
+    if not repo.is_dir():
+        parser.error("--repo must be a directory")
+    if saving:
+        database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with sqlite3.connect(database) as connection:
+            remember(connection, args, repo, root)
+        return 0
+    if not database.is_file():
+        return 1
+    mode = "rw" if args.search else "ro"
+    with sqlite3.connect(database.as_uri() + "?mode=" + mode, uri=True) as connection:
+        return recall(connection, args, repo, root)
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    argv = sys.argv[1:] if argv is None else argv
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Use 'skill-lookup remember --help' or 'skill-lookup recall --help' for verified results.",
+    )
     parser.add_argument(
         "files",
         nargs="+",
@@ -265,7 +431,6 @@ def main(argv=None):
     parser.add_argument(
         "--status", action="store_true", help="Show cache disposition on stderr"
     )
-    args = parser.parse_args(argv)
     root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "skills"
     database = (
         Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")).absolute()
@@ -274,6 +439,9 @@ def main(argv=None):
     )
     previous_umask = os.umask(0o077)
     try:
+        if argv and argv[0] in {"remember", "recall"}:
+            return memory_command(argv[0], argv[1:], root, database)
+        args = parser.parse_args(argv)
         sources = resolve_sources(args.files, root, search=args.search is not None)
         if args.search is not None:
             search_files(sources, args.search, root, database)
